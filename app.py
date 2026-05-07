@@ -2,8 +2,27 @@ from flask import Flask, request, jsonify
 import requests
 import re
 import json
+import os
 
 app = Flask(__name__)
+
+def extract_url(text):
+    """从任何文本中提取网址"""
+    if not text:
+        return None
+    
+    # 如果已经是纯网址，直接返回
+    if text.strip().startswith('http'):
+        return text.strip()
+    
+    # 从富文本链接中提取网址
+    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    urls = re.findall(url_pattern, text)
+    
+    if urls:
+        return urls[0]
+    
+    return None
 
 def parse_xiaohongshu(url):
     headers = {
@@ -106,10 +125,13 @@ def parse():
         }
     
     data = request.get_json()
-    url = data.get('url', '') if data else ''
+    raw_url = data.get('url', '') if data else ''
+    
+    # 自动提取真正的网址
+    url = extract_url(raw_url)
     
     if not url:
-        return jsonify({'success': False, 'error': '缺少url参数'}), 400
+        return jsonify({'success': False, 'error': '无法从输入中提取有效网址'}), 400
     
     result = parse_xiaohongshu(url)
     response = jsonify(result)
@@ -117,6 +139,5 @@ def parse():
     return response
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)

@@ -140,11 +140,13 @@ def parse():
     result = parse_xiaohongshu(url)
 
     # ✅ 如果指定了 field，直接返回纯文本（飞书自动化可直接用 body）
-    if field:
+  if field:
         if not result.get('success'):
-            return make_cors_response(f"error: {result.get('error', '未知错误')}", is_text=True, status=500)
+            return make_cors_response({'value': '', 'error': result.get('error', '')}, status=500)
         value = result.get(field, '')
-        return make_cors_response(value, is_text=True)
+        if isinstance(value, list):
+            value = '、'.join(value)
+        return make_cors_response({'value': str(value)})
 
     # 未指定 field，返回完整 JSON
     return make_cors_response(result)

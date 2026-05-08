@@ -6,6 +6,7 @@ import os
 
 app = Flask(__name__)
 
+
 def extract_url(text):
     """从任何文本中提取网址"""
     if not text:
@@ -17,6 +18,7 @@ def extract_url(text):
     if urls:
         return urls[0]
     return None
+
 
 def parse_xiaohongshu(url):
     headers = {
@@ -52,13 +54,14 @@ def parse_xiaohongshu(url):
                 try:
                     data = json.loads(m.group(1))
                     note_id = list(data.get('note', {}).get('noteDetailMap', {}).keys())[0]
-                except:
+                except Exception:
                     pass
 
         if not note_id:
             return {'success': False, 'error': '无法提取笔记ID，请检查链接'}
 
         # 调用小红书 API
+        import time
         api_url = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"
         payload = {
             "source_note_id": note_id,
@@ -69,7 +72,7 @@ def parse_xiaohongshu(url):
         api_resp = session.post(api_url, json=payload, headers={
             **headers,
             'Content-Type': 'application/json;charset=UTF-8',
-            'X-T': str(int(__import__('time').time() * 1000)),
+            'X-T': str(int(time.time() * 1000)),
         }, timeout=15)
 
         api_data = api_resp.json()
@@ -82,7 +85,7 @@ def parse_xiaohongshu(url):
                 'note_id': note_id,
                 'title': note.get('title', ''),
                 'content': note.get('desc', ''),
-                'tags': '、'.join(tags),   # 直接拼接为字符串
+                'tags': '、'.join(tags),
                 'author': note.get('user', {}).get('nickname', ''),
                 'likes': str(note.get('interact_info', {}).get('liked_count', 0)),
                 'collects': str(note.get('interact_info', {}).get('collected_count', 0)),
@@ -101,7 +104,6 @@ def parse_xiaohongshu(url):
             'content': desc,
             'tags': '',
             'author': '',
-            'source': 'html_fallback',
             'warning': 'API受限，仅从页面提取了基础信息'
         }
 
@@ -109,14 +111,10 @@ def parse_xiaohongshu(url):
         return {'success': False, 'error': f'解析异常: {str(e)}'}
 
 
-def make_cors_response(text_or_json, is_text=False, status=200):
-    """统一处理 CORS 响应头"""
-    if is_text:
-        resp = app.make_response((str(text_or_json), status))
-        resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-    else:
-        resp = app.make_response((json.dumps(text_or_json, ensure_ascii=False), status))
-        resp.headers['Content-Type'] = 'application/json; charset=utf-8'
+def make_cors_response(data, status=200):
+    """统一处理 CORS 响应头，始终返回 JSON"""
+    resp = app.make_response((json.dumps(data, ensure_ascii=False), status))
+    resp.headers['Content-Type'] = 'application/json; charset=utf-8'
     resp.headers['Access-Control-Allow-Origin'] = '*'
     resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
     resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
@@ -127,11 +125,11 @@ def make_cors_response(text_or_json, is_text=False, status=200):
 def parse():
     # 处理预检请求
     if request.method == 'OPTIONS':
-        return make_cors_response('', is_text=True)
+        return make_cors_response({})
 
     data = request.get_json()
     raw_url = data.get('url', '') if data else ''
-    field = data.get('field', '')  # 可选：title / content / tags / author
+    field = data.get('field', '')  # 可选: title / content / tags / author
 
     url = extract_url(raw_url)
     if not url:
@@ -139,8 +137,8 @@ def parse():
 
     result = parse_xiaohongshu(url)
 
-    # ✅ 如果指定了 field，直接返回纯文本（飞书自动化可直接用 body）
-  if field:
+    # 如果指定了 field，返回 {"value": "具体内容"} 格式
+    if field:
         if not result.get('success'):
             return make_cors_response({'value': '', 'error': result.get('error', '')}, status=500)
         value = result.get(field, '')

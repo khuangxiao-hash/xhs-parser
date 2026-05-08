@@ -19,8 +19,13 @@ def extract_url(text):
     return None
 
 
+def extract_tags_from_text(text):
+    """从文本中提取 #标签"""
+    tags = re.findall(r'#([^\s#，,。！!？?、]+)', text)
+    return '、'.join(tags) if tags else ''
+
+
 def parse_xiaohongshu(url):
-    # 从环境变量读取 Cookie
     cookie = os.environ.get('XHS_COOKIE', '')
 
     headers = {
@@ -62,50 +67,61 @@ def parse_xiaohongshu(url):
         if not note_id:
             return {'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': '无法提取笔记ID'}
 
-        api_url = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"
-        payload = {
-            "source_note_id": note_id,
-            "image_formats": ["jpg", "webp", "avif"],
-            "extra": {"need_body_topic": 1}
-        }
+        # 尝试从 HTML 的 SSR 数据提取完整信息
+        ssr_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?})\s*</script>', html, re.DOTALL)
+        if ssr_match:
+            try:
+                ssr_data = json.loads(ssr_match.group(1))
+                note_detail = ssr_data.get('note', {}).get('noteDetailMap', {}).get(note_id, {}).get('note', {})
+                if note_detail:
+                    tags = [t.get('name', '') for t in note_detail.get('tagList', []) if isinstance(t, dict)]
+                    desc = note_detail.get('desc', '')
+                    if not tags:
+                        tags_from_desc = extract_tags_from_text(desc)
+                    else:
+                        tags_from_desc = '、'.join(tags)
+                    return {
+                        'success': True,
+                        'title': note_detail.get('title', ''),
+                        'content': desc,
+                        'tags': tags_from_desc,
+                        'author': note_detail.get('user', {}).get('nickname', ''),
+                        'error': ''
+                    }
+            except Exception:
+                pass
 
-        api_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Content-Type': 'application/json;charset=UTF-8',
-            'Referer': 'https://www.xiaohongshu.com/',
-            'Origin': 'https://www.xiaohongshu.com',
-            'Cookie': cookie,
-            'X-T': str(int(time.time() * 1000)),
-        }
-
-        api_resp = session.post(api_url, json=payload, headers=api_headers, timeout=15)
-        api_data = api_resp.json()
-
-        if api_data.get('code') == 0 and api_data.get('data', {}).get('items'):
-            note = api_data['data']['items'][0].get('note_card', {})
-            tags = [t.get('name', '') for t in note.get('tag_list', []) if isinstance(t, dict)]
-            return {
-                'success': True,
-                'title': note.get('title', ''),
-                'content': note.get('desc', ''),
-                'tags': '、'.join(tags),
-                'author': note.get('user', {}).get('nickname', ''),
-                'error': ''
-            }
-
-        # 回退：从 HTML 提取
+        # 回退：从 HTML meta 标签提取
         title_m = re.search(r'<title>(.*?)</title>', html)
         title = title_m.group(1).replace(' - 小红书', '').strip() if title_m else ''
-        desc_m = re.search(r'<meta name="description" content="(.*?)">', html)
+
+        # 提取 description
+        desc_m = re.search(r'<meta name="description" content="(.*?)"', html)
         desc = desc_m.group(1) if desc_m else ''
+
+        # 从 description 提取标签
+        tags = extract_tags_from_text(desc)
+
+        # 提取作者：从多个位置尝试
+        author = ''
+        author_patterns = [
+            r'"nickname"\s*:\s*"([^"]+)"',
+            r'"author"\s*:\s*"([^"]+)"',
+            r'<meta name="author" content="([^"]+)"',
+        ]
+        for ap in author_patterns:
+            am = re.search(ap, html)
+            if am:
+                author = am.group(1)
+                break
 
         return {
             'success': True,
             'title': title,
             'content': desc,
-            'tags': '',
-            'author': '',
-            'error': f'API返回码:{api_data.get("code")}，已回退HTML提取'
+            'tags': tags,
+            'author': author,
+            'error': 'HTML提取模式'
         }
 
     except Exception as e:

@@ -1,14 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, Response
 import requests
 import re
 import json
 import os
+import time
 
 app = Flask(__name__)
 
 
 def extract_url(text):
-    """从任何文本中提取网址"""
     if not text:
         return None
     if text.strip().startswith('http'):
@@ -34,7 +34,6 @@ def parse_xiaohongshu(url):
         html = resp.text
         final_url = resp.url
 
-        # 提取 note_id
         note_id = None
         patterns = [
             r'/explore/([a-zA-Z0-9]+)',
@@ -58,10 +57,8 @@ def parse_xiaohongshu(url):
                     pass
 
         if not note_id:
-            return {'success': False, 'error': '无法提取笔记ID，请检查链接'}
+            return {'success': False, 'error': '无法提取笔记ID'}
 
-        # 调用小红书 API
-        import time
         api_url = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"
         payload = {
             "source_note_id": note_id,
@@ -82,16 +79,13 @@ def parse_xiaohongshu(url):
             tags = [t.get('name', '') for t in note.get('tag_list', []) if isinstance(t, dict)]
             return {
                 'success': True,
-                'note_id': note_id,
                 'title': note.get('title', ''),
                 'content': note.get('desc', ''),
                 'tags': '、'.join(tags),
                 'author': note.get('user', {}).get('nickname', ''),
-                'likes': str(note.get('interact_info', {}).get('liked_count', 0)),
-                'collects': str(note.get('interact_info', {}).get('collected_count', 0)),
             }
 
-        # API 失败，回退到 HTML 提取
+        # 回退 HTML
         title_m = re.search(r'<title>(.*?)</title>', html)
         title = title_m.group(1).replace(' - 小红书', '').strip() if title_m else ''
         desc_m = re.search(r'<meta name="description" content="(.*?)">', html)
@@ -99,61 +93,52 @@ def parse_xiaohongshu(url):
 
         return {
             'success': True,
-            'note_id': note_id,
             'title': title,
             'content': desc,
             'tags': '',
             'author': '',
-            'warning': 'API受限，仅从页面提取了基础信息'
         }
 
     except Exception as e:
-        return {'success': False, 'error': f'解析异常: {str(e)}'}
+        return {'success': False, 'error': str(e)}
 
 
-def make_cors_response(data, status=200):
-    """统一处理 CORS 响应头，始终返回 JSON"""
-    resp = app.make_response((json.dumps(data, ensure_ascii=False), status))
-    resp.headers['Content-Type'] = 'application/json; charset=utf-8'
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return resp
+def cors(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
 
 
 @app.route('/parse', methods=['POST', 'OPTIONS'])
 def parse():
-    # 处理预检请求
     if request.method == 'OPTIONS':
-        return make_cors_response({})
+        return cors(Response('', status=200))
 
     data = request.get_json()
     raw_url = data.get('url', '') if data else ''
-    field = data.get('field', '')  # 可选: title / content / tags / author
+    field = data.get('field', '')
 
     url = extract_url(raw_url)
     if not url:
-        return make_cors_response({'success': False, 'error': '无法从输入中提取有效网址'}, status=400)
+        return cors(Response('ERROR: 无效网址', status=400, mimetype='text/plain; charset=utf-8'))
 
     result = parse_xiaohongshu(url)
 
-    # 如果指定了 field，返回 {"value": "具体内容"} 格式
+    # 指定 field 时，返回纯文本（飞书 Text 模式直接用）
     if field:
         if not result.get('success'):
-            return make_cors_response({'value': '', 'error': result.get('error', '')}, status=500)
+            return cors(Response('ERROR: ' + result.get('error', ''), status=500, mimetype='text/plain; charset=utf-8'))
         value = result.get(field, '')
-        if isinstance(value, list):
-            value = '、'.join(value)
-        return make_cors_response({'value': str(value)})
+        return cors(Response(str(value), status=200, mimetype='text/plain; charset=utf-8'))
 
-    # 未指定 field，返回完整 JSON
-    return make_cors_response(result)
+    # 不指定 field，返回完整 JSON
+    return cors(Response(json.dumps(result, ensure_ascii=False), status=200, mimetype='application/json; charset=utf-8'))
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    """健康检查，防止 Render 休眠"""
-    return make_cors_response({'status': 'ok'})
+    return cors(Response('{"status":"ok"}', status=200, mimetype='application/json'))
 
 
 if __name__ == '__main__':

@@ -57,7 +57,7 @@ def parse_xiaohongshu(url):
                     pass
 
         if not note_id:
-            return {'success': False, 'error': '无法提取笔记ID'}
+            return {'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': '无法提取笔记ID'}
 
         api_url = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"
         payload = {
@@ -83,9 +83,10 @@ def parse_xiaohongshu(url):
                 'content': note.get('desc', ''),
                 'tags': '、'.join(tags),
                 'author': note.get('user', {}).get('nickname', ''),
+                'error': ''
             }
 
-        # 回退 HTML
+        # 回退 HTML 提取
         title_m = re.search(r'<title>(.*?)</title>', html)
         title = title_m.group(1).replace(' - 小红书', '').strip() if title_m else ''
         desc_m = re.search(r'<meta name="description" content="(.*?)">', html)
@@ -97,48 +98,44 @@ def parse_xiaohongshu(url):
             'content': desc,
             'tags': '',
             'author': '',
+            'error': 'API受限，仅提取了基础信息'
         }
 
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': str(e)}
 
 
-def cors(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return response
+def make_json_response(data, status=200):
+    resp = Response(
+        json.dumps(data, ensure_ascii=False),
+        status=status,
+        mimetype='application/json; charset=utf-8'
+    )
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return resp
 
 
 @app.route('/parse', methods=['POST', 'OPTIONS'])
 def parse():
     if request.method == 'OPTIONS':
-        return cors(Response('', status=200))
+        return make_json_response({})
 
     data = request.get_json()
     raw_url = data.get('url', '') if data else ''
-    field = data.get('field', '')
 
     url = extract_url(raw_url)
     if not url:
-        return cors(Response('ERROR: 无效网址', status=400, mimetype='text/plain; charset=utf-8'))
+        return make_json_response({'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': '无效网址'}, status=400)
 
     result = parse_xiaohongshu(url)
-
-    # 指定 field 时，返回纯文本（飞书 Text 模式直接用）
-    if field:
-        if not result.get('success'):
-            return cors(Response('ERROR: ' + result.get('error', ''), status=500, mimetype='text/plain; charset=utf-8'))
-        value = result.get(field, '')
-        return cors(Response(str(value), status=200, mimetype='text/plain; charset=utf-8'))
-
-    # 不指定 field，返回完整 JSON
-    return cors(Response(json.dumps(result, ensure_ascii=False), status=200, mimetype='application/json; charset=utf-8'))
+    return make_json_response(result)
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    return cors(Response('{"status":"ok"}', status=200, mimetype='application/json'))
+    return make_json_response({'status': 'ok'})
 
 
 if __name__ == '__main__':

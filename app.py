@@ -56,64 +56,78 @@ def parse_xiaohongshu(url):
                 break
 
         if not note_id:
-            m = re.search(r'window\._SSR_HYDRATED_DATA\s*=\s*({.*?})<', html)
-            if m:
+            return {'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': '无法提取笔记ID'}
+
+        # 方法1: 从 SSR 数据中提取（最准确）
+        ssr_patterns = [
+            r'window\.__INITIAL_STATE__\s*=\s*({.*?})\s*</script>',
+            r'window\.__pinia\s*=\s*({.*?})\s*</script>',
+        ]
+        for sp in ssr_patterns:
+            ssr_match = re.search(sp, html, re.DOTALL)
+            if ssr_match:
                 try:
-                    data = json.loads(m.group(1))
-                    note_id = list(data.get('note', {}).get('noteDetailMap', {}).keys())[0]
+                    ssr_data = json.loads(ssr_match.group(1))
+                    # 尝试找到 note 详情
+                    note_map = (ssr_data.get('note', {}) or {}).get('noteDetailMap', {}) or {}
+                    note_detail = note_map.get(note_id, {}).get('note', {})
+                    if note_detail:
+                        tags_list = [t.get('name', '') for t in note_detail.get('tagList', []) if isinstance(t, dict)]
+                        desc = note_detail.get('desc', '')
+                        tags = '、'.join(tags_list) if tags_list else extract_tags_from_text(desc)
+                        author = note_detail.get('user', {}).get('nickname', '')
+                        return {
+                            'success': True,
+                            'title': note_detail.get('title', ''),
+                            'content': desc,
+                            'tags': tags,
+                            'author': author,
+                            'error': ''
+                        }
                 except Exception:
                     pass
 
-        if not note_id:
-            return {'success': False, 'title': '', 'content': '', 'tags': '', 'author': '', 'error': '无法提取笔记ID'}
+        # 方法2: 从 HTML 中精准定位作者（找笔记作者，不是登录用户）
+        # 小红书 HTML 里笔记作者通常在 noteCard 或 note-detail 附近
+        author = ''
 
-        # 尝试从 HTML 的 SSR 数据提取完整信息
-        ssr_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?})\s*</script>', html, re.DOTALL)
-        if ssr_match:
-            try:
-                ssr_data = json.loads(ssr_match.group(1))
-                note_detail = ssr_data.get('note', {}).get('noteDetailMap', {}).get(note_id, {}).get('note', {})
-                if note_detail:
-                    tags = [t.get('name', '') for t in note_detail.get('tagList', []) if isinstance(t, dict)]
-                    desc = note_detail.get('desc', '')
-                    if not tags:
-                        tags_from_desc = extract_tags_from_text(desc)
-                    else:
-                        tags_from_desc = '、'.join(tags)
-                    return {
-                        'success': True,
-                        'title': note_detail.get('title', ''),
-                        'content': desc,
-                        'tags': tags_from_desc,
-                        'author': note_detail.get('user', {}).get('nickname', ''),
-                        'error': ''
-                    }
-            except Exception:
-                pass
+        # 尝试找 noteCard 区域内的 nickname
+        note_section_match = re.search(
+            r'"noteId"\s*:\s*"' + note_id + r'".*?"nickname"\s*:\s*"([^"]+)"',
+            html, re.DOTALL
+        )
+        if note_section_match:
+            author = note_section_match.group(1)
 
-        # 回退：从 HTML meta 标签提取
+        # 备用：找 note_card 里的 user nickname
+        if not author:
+            user_block_match = re.search(
+                r'"note_card".*?"user".*?"nickname"\s*:\s*"([^"]+)"',
+                html, re.DOTALL
+            )
+            if user_block_match:
+                author = user_block_match.group(1)
+
+        # 备用：og:title 有时含作者信息
+        if not author:
+            og_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+            if og_match:
+                og_title = og_match.group(1)
+                # og:title 格式通常是 "标题 - 作者 的小红书"
+                author_m = re.search(r'-\s*(.+?)\s*的小红书', og_title)
+                if author_m:
+                    author = author_m.group(1)
+
+        # 提取标题
         title_m = re.search(r'<title>(.*?)</title>', html)
         title = title_m.group(1).replace(' - 小红书', '').strip() if title_m else ''
 
-        # 提取 description
+        # 提取正文
         desc_m = re.search(r'<meta name="description" content="(.*?)"', html)
         desc = desc_m.group(1) if desc_m else ''
 
-        # 从 description 提取标签
+        # 从正文提取标签
         tags = extract_tags_from_text(desc)
-
-        # 提取作者：从多个位置尝试
-        author = ''
-        author_patterns = [
-            r'"nickname"\s*:\s*"([^"]+)"',
-            r'"author"\s*:\s*"([^"]+)"',
-            r'<meta name="author" content="([^"]+)"',
-        ]
-        for ap in author_patterns:
-            am = re.search(ap, html)
-            if am:
-                author = am.group(1)
-                break
 
         return {
             'success': True,

@@ -7,7 +7,6 @@ import time
 
 app = Flask(__name__)
 
-
 def extract_url(text):
     if not text:
         return None
@@ -21,11 +20,15 @@ def extract_url(text):
 
 
 def parse_xiaohongshu(url):
+    # 从环境变量读取 Cookie
+    cookie = os.environ.get('XHS_COOKIE', '')
+
     headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Referer': 'https://www.xiaohongshu.com/',
+        'Cookie': cookie,
     }
 
     try:
@@ -66,12 +69,16 @@ def parse_xiaohongshu(url):
             "extra": {"need_body_topic": 1}
         }
 
-        api_resp = session.post(api_url, json=payload, headers={
-            **headers,
+        api_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Content-Type': 'application/json;charset=UTF-8',
+            'Referer': 'https://www.xiaohongshu.com/',
+            'Origin': 'https://www.xiaohongshu.com',
+            'Cookie': cookie,
             'X-T': str(int(time.time() * 1000)),
-        }, timeout=15)
+        }
 
+        api_resp = session.post(api_url, json=payload, headers=api_headers, timeout=15)
         api_data = api_resp.json()
 
         if api_data.get('code') == 0 and api_data.get('data', {}).get('items'):
@@ -86,7 +93,7 @@ def parse_xiaohongshu(url):
                 'error': ''
             }
 
-        # 回退 HTML 提取
+        # 回退：从 HTML 提取
         title_m = re.search(r'<title>(.*?)</title>', html)
         title = title_m.group(1).replace(' - 小红书', '').strip() if title_m else ''
         desc_m = re.search(r'<meta name="description" content="(.*?)">', html)
@@ -98,7 +105,7 @@ def parse_xiaohongshu(url):
             'content': desc,
             'tags': '',
             'author': '',
-            'error': 'API受限，仅提取了基础信息'
+            'error': f'API返回码:{api_data.get("code")}，已回退HTML提取'
         }
 
     except Exception as e:
